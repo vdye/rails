@@ -70,5 +70,45 @@ class TestFixturesTest < ActiveRecord::TestCase
       clean_up_connection_handler
       FileUtils.rm_r(tmp_dir)
     end
+
+    def test_disable_transactional_tests_per_connection
+      tmp_dir = Dir.mktmpdir
+      File.write(File.join(tmp_dir, "zines.yml"), <<~YML)
+      going_out:
+        title: Hello
+      YML
+
+      klass = Class.new(Minitest::Test) do
+        include ActiveRecord::TestFixtures
+
+        self.fixture_paths = [tmp_dir]
+        self.use_transactional_tests = true
+
+        fixtures :all
+
+        def test_run_successfully
+          assert_equal("Hello", Zine.first.title)
+          assert_equal("Hello", zines(:going_out).title)
+        end
+      end
+
+      ActiveSupport::Notifications.unsubscribe(@connection_subscriber)
+      @connection_subscriber = nil
+
+      config_hash = ActiveRecord::Base.configurations.configs_for(env_name: "arunit", name: "primary").configuration_hash
+      new_config_hash = config_hash.merge(disable_test_transactions: true)
+
+      old_handler = ActiveRecord::Base.connection_handler
+      ActiveRecord::Base.connection_handler = ActiveRecord::ConnectionAdapters::ConnectionHandler.new
+      db_config = ActiveRecord::DatabaseConfigurations::HashConfig.new("arunit", "primary", new_config_hash)
+      ActiveRecord::Base.establish_connection(db_config)
+
+      test_result = klass.new("test_run_successfully").run
+      assert_predicate(test_result, :passed?)
+    ensure
+      ActiveRecord::Base.connection_handler = old_handler
+      clean_up_connection_handler
+      FileUtils.rm_r(tmp_dir)
+    end
   end
 end
